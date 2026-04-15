@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Craftly Bulk Uploader · Netlify Proxy</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 2rem;
+      min-height: 100vh;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .card {
+      background: rgba(255,255,255,0.98);
+      border-radius: 2rem;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.3);
+    }
+    .header {
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      padding: 1.5rem 2rem;
+      color: white;
+    }
+    .content { padding: 2rem; }
+    .upload-zone {
+      border: 3px dashed #cbd5e1;
+      border-radius: 1.5rem;
+      padding: 2.5rem;
+      text-align: center;
+      cursor: pointer;
+      background: #f8fafc;
+      margin-bottom: 1.5rem;
+      transition: 0.2s;
+    }
+    .upload-zone.dragover { border-color: #2a5298; background: #eef2ff; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: #f1f5f9;
+      padding: 1rem;
+      border-radius: 1rem;
+      text-align: center;
+    }
+    .stat-number { font-size: 2rem; font-weight: 800; color: #0f172a; }
+    .progress-bar {
+      background: #e2e8f0;
+      border-radius: 999px;
+      height: 32px;
+      overflow: hidden;
+      margin: 1rem 0;
+    }
+    .progress-fill {
+      background: linear-gradient(90deg, #1e3c72, #2a5298);
+      width: 0%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 0.75rem;
+      transition: width 0.2s;
+    }
+    .log-box {
+      background: #0f172a;
+      border-radius: 1rem;
+      padding: 1rem;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.7rem;
+      margin-top: 1rem;
+    }
+    .log-entry { padding: 0.25rem 0.5rem; border-bottom: 1px solid #1e293b; color: #94a3b8; }
+    .log-entry.success { color: #4ade80; }
+    .log-entry.error { color: #f87171; }
+    .btn {
+      padding: 0.6rem 1.2rem;
+      border-radius: 999px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      margin-right: 0.5rem;
+    }
+    .btn-primary { background: #1e3c72; color: white; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-badge {
+      display: inline-block;
+      background: #e2e8f0;
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <div class="header">
+      <h1>📦 Craftly Bulk JSON Uploader</h1>
+      <p>Netlify Proxy Edition — No CORS Issues! 🚀</p>
+    </div>
+    <div class="content">
+      <div class="upload-zone" id="dropZone">
+        <div style="font-size: 3rem;">📦⬇️</div>
+        <h3>Drop ZIP file or click to browse</h3>
+        <p>Supports 10,000+ JSON files | Uses Netlify Function proxy</p>
+        <input type="file" id="zipInput" accept=".zip" style="display:none">
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-number" id="totalFiles">0</div><div>JSON Files</div></div>
+        <div class="stat-card"><div class="stat-number" id="uploadedCount">0</div><div>Uploaded</div></div>
+        <div class="stat-card"><div class="stat-number" id="successCount">0</div><div>✅ Success</div></div>
+        <div class="stat-card"><div class="stat-number" id="failCount">0</div><div>❌ Failed</div></div>
+      </div>
+
+      <div class="progress-bar"><div class="progress-fill" id="progressFill">0%</div></div>
+
+      <div>
+        <button id="startUpload" class="btn btn-primary" disabled>🚀 Start Upload</button>
+        <button id="resetBtn" class="btn btn-primary" style="background:#64748b;">⟳ Reset</button>
+        <button id="clearLogBtn" class="btn btn-primary" style="background:#64748b;">🗑 Clear Log</button>
+      </div>
+
+      <div>
+        <span class="status-badge" id="apiStatus">🔗 Proxy: Ready</span>
+      </div>
+
+      <div class="log-box" id="logContainer">
+        <div class="log-entry">✨ Ready — Upload ZIP file to begin</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let jsonFiles = [];
+  let uploadStatus = [];
+  let isUploading = false;
+
+  const dropZone = document.getElementById('dropZone');
+  const zipInput = document.getElementById('zipInput');
+  const startBtn = document.getElementById('startUpload');
+  const resetBtn = document.getElementById('resetBtn');
+  const clearLogBtn = document.getElementById('clearLogBtn');
+  const logContainer = document.getElementById('logContainer');
+  const totalFilesSpan = document.getElementById('totalFiles');
+  const uploadedCountSpan = document.getElementById('uploadedCount');
+  const successCountSpan = document.getElementById('successCount');
+  const failCountSpan = document.getElementById('failCount');
+  const progressFill = document.getElementById('progressFill');
+
+  function addLog(msg, type = 'info') {
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${type}`;
+    entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logContainer.appendChild(entry);
+    entry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function updateStats() {
+    const total = jsonFiles.length;
+    const uploaded = uploadStatus.filter(s => s === 'success' || s === 'failed' || s === 'uploading').length;
+    const success = uploadStatus.filter(s => s === 'success').length;
+    const failed = uploadStatus.filter(s => s === 'failed').length;
+    totalFilesSpan.textContent = total;
+    uploadedCountSpan.textContent = uploaded;
+    successCountSpan.textContent = success;
+    failCountSpan.textContent = failed;
+    const percent = total === 0 ? 0 : (uploaded / total) * 100;
+    progressFill.style.width = `${percent}%`;
+    progressFill.textContent = `${Math.round(percent)}%`;
+    startBtn.disabled = (total === 0 || isUploading);
+  }
+
+  function resetAll() {
+    if (isUploading) isUploading = false;
+    jsonFiles = [];
+    uploadStatus = [];
+    updateStats();
+    addLog('🔄 Reset complete', 'info');
+  }
+
+  async function handleZip(file) {
+    if (!file.name.endsWith('.zip')) {
+      addLog('Please select a .zip file', 'error');
+      return;
+    }
+    resetAll();
+    addLog(`📂 Loading ${file.name}...`, 'info');
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const extracted = [];
+      for (const [filename, entry] of Object.entries(zip.files)) {
+        if (entry.dir) continue;
+        if (filename.toLowerCase().endsWith('.json')) {
+          const content = await entry.async('string');
+          try {
+            JSON.parse(content);
+            extracted.push({ name: filename, content });
+          } catch (e) {
+            addLog(`⚠️ Invalid JSON: ${filename}`, 'error');
+          }
+        }
+      }
+      if (extracted.length === 0) {
+        addLog('No valid JSON files found', 'error');
+        return;
+      }
+      jsonFiles = extracted;
+      uploadStatus = new Array(jsonFiles.length).fill('pending');
+      updateStats();
+      addLog(`✅ Loaded ${jsonFiles.length} JSON files`, 'success');
+    } catch (err) {
+      addLog(`ZIP error: ${err.message}`, 'error');
+    }
+  }
+
+  async function uploadSingleFile(fileObj, idx) {
+    const formData = new FormData();
+    const blob = new Blob([fileObj.content], { type: 'application/json' });
+    formData.append('file', blob, fileObj.name);
+    
+    try {
+      // Call Netlify Function proxy
+      const response = await fetch('/.netlify/functions/upload-proxy', {
+        method: 'POST',
+        body: formData
+      });
+      
+      const data = await response.json();
+      const isSuccess = response.ok && (data?.accepted === true || data?.ok === true || data?.success === true);
+      
+      if (isSuccess) {
+        uploadStatus[idx] = 'success';
+        addLog(`✅ ${fileObj.name} uploaded`, 'success');
+        return true;
+      } else {
+        uploadStatus[idx] = 'failed';
+        addLog(`❌ ${fileObj.name} failed: ${JSON.stringify(data).substring(0, 100)}`, 'error');
+        return false;
+      }
+    } catch (err) {
+      uploadStatus[idx] = 'failed';
+      addLog(`❌ ${fileObj.name} error: ${err.message}`, 'error');
+      return false;
+    }
+  }
+
+  async function startBulkUpload() {
+    if (jsonFiles.length === 0) return;
+    if (isUploading) return;
+    isUploading = true;
+    startBtn.disabled = true;
+    addLog(`🚀 Starting upload of ${jsonFiles.length} files via Netlify proxy...`, 'info');
+    
+    for (let i = 0; i < jsonFiles.length; i++) {
+      if (uploadStatus[i] === 'success' || uploadStatus[i] === 'failed') continue;
+      uploadStatus[i] = 'uploading';
+      updateStats();
+      await uploadSingleFile(jsonFiles[i], i);
+      updateStats();
+    }
+    
+    isUploading = false;
+    const successCount = uploadStatus.filter(s => s === 'success').length;
+    addLog(`🏁 Complete! Success: ${successCount} / ${jsonFiles.length}`, successCount === jsonFiles.length ? 'success' : 'info');
+    startBtn.disabled = false;
+  }
+
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) await handleZip(file);
+  });
+  dropZone.addEventListener('click', () => zipInput.click());
+  zipInput.addEventListener('change', async (e) => {
+    if (e.target.files[0]) await handleZip(e.target.files[0]);
+    zipInput.value = '';
+  });
+  startBtn.addEventListener('click', startBulkUpload);
+  resetBtn.addEventListener('click', resetAll);
+  clearLogBtn.addEventListener('click', () => { logContainer.innerHTML = ''; addLog('Log cleared', 'info'); });
+</script>
+</body>
+</html>
